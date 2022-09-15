@@ -18,16 +18,16 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"os"
 	"strings"
 
+	"github.com/fatedier/frp/client"
+	"github.com/fatedier/frp/pkg/config"
+
 	"github.com/rodaine/table"
 	"github.com/spf13/cobra"
-
-	"github.com/fatedier/frp/client"
-	"github.com/fatedier/frp/models/config"
 )
 
 func init() {
@@ -38,20 +38,13 @@ var statusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Overview of all proxies status",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		iniContent, err := config.GetRenderedConfFromFile(cfgFile)
+		cfg, _, _, err := config.ParseClientConfig(cfgFile)
 		if err != nil {
 			fmt.Println(err)
 			os.Exit(1)
 		}
 
-		clientCfg, err := parseClientCommonCfg(CfgFileTypeIni, iniContent)
-		if err != nil {
-			fmt.Println(err)
-			os.Exit(1)
-		}
-
-		err = status(clientCfg)
-		if err != nil {
+		if err = status(cfg); err != nil {
 			fmt.Printf("frpc get status error: %v\n", err)
 			os.Exit(1)
 		}
@@ -84,7 +77,7 @@ func status(clientCfg config.ClientCommonConf) error {
 		return fmt.Errorf("admin api status code [%d]", resp.StatusCode)
 	}
 
-	body, err := ioutil.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return err
 	}
@@ -95,55 +88,55 @@ func status(clientCfg config.ClientCommonConf) error {
 	}
 
 	fmt.Println("Proxy Status...")
-	if len(res.Tcp) > 0 {
-		fmt.Printf("TCP")
+	if len(res.TCP) > 0 {
+		fmt.Println("TCP")
 		tbl := table.New("Name", "Status", "LocalAddr", "Plugin", "RemoteAddr", "Error")
-		for _, ps := range res.Tcp {
+		for _, ps := range res.TCP {
 			tbl.AddRow(ps.Name, ps.Status, ps.LocalAddr, ps.Plugin, ps.RemoteAddr, ps.Err)
 		}
 		tbl.Print()
 		fmt.Println("")
 	}
-	if len(res.Udp) > 0 {
-		fmt.Printf("UDP")
+	if len(res.UDP) > 0 {
+		fmt.Println("UDP")
 		tbl := table.New("Name", "Status", "LocalAddr", "Plugin", "RemoteAddr", "Error")
-		for _, ps := range res.Udp {
+		for _, ps := range res.UDP {
 			tbl.AddRow(ps.Name, ps.Status, ps.LocalAddr, ps.Plugin, ps.RemoteAddr, ps.Err)
 		}
 		tbl.Print()
 		fmt.Println("")
 	}
-	if len(res.Http) > 0 {
-		fmt.Printf("HTTP")
+	if len(res.HTTP) > 0 {
+		fmt.Println("HTTP")
 		tbl := table.New("Name", "Status", "LocalAddr", "Plugin", "RemoteAddr", "Error")
-		for _, ps := range res.Http {
+		for _, ps := range res.HTTP {
 			tbl.AddRow(ps.Name, ps.Status, ps.LocalAddr, ps.Plugin, ps.RemoteAddr, ps.Err)
 		}
 		tbl.Print()
 		fmt.Println("")
 	}
-	if len(res.Https) > 0 {
-		fmt.Printf("HTTPS")
+	if len(res.HTTPS) > 0 {
+		fmt.Println("HTTPS")
 		tbl := table.New("Name", "Status", "LocalAddr", "Plugin", "RemoteAddr", "Error")
-		for _, ps := range res.Https {
+		for _, ps := range res.HTTPS {
 			tbl.AddRow(ps.Name, ps.Status, ps.LocalAddr, ps.Plugin, ps.RemoteAddr, ps.Err)
 		}
 		tbl.Print()
 		fmt.Println("")
 	}
-	if len(res.Stcp) > 0 {
-		fmt.Printf("STCP")
+	if len(res.STCP) > 0 {
+		fmt.Println("STCP")
 		tbl := table.New("Name", "Status", "LocalAddr", "Plugin", "RemoteAddr", "Error")
-		for _, ps := range res.Stcp {
+		for _, ps := range res.STCP {
 			tbl.AddRow(ps.Name, ps.Status, ps.LocalAddr, ps.Plugin, ps.RemoteAddr, ps.Err)
 		}
 		tbl.Print()
 		fmt.Println("")
 	}
-	if len(res.Xtcp) > 0 {
-		fmt.Printf("XTCP")
+	if len(res.XTCP) > 0 {
+		fmt.Println("XTCP")
 		tbl := table.New("Name", "Status", "LocalAddr", "Plugin", "RemoteAddr", "Error")
-		for _, ps := range res.Xtcp {
+		for _, ps := range res.XTCP {
 			tbl.AddRow(ps.Name, ps.Status, ps.LocalAddr, ps.Plugin, ps.RemoteAddr, ps.Err)
 		}
 		tbl.Print()

@@ -15,23 +15,24 @@
 package sub
 
 import (
-	"context"
 	"fmt"
+	"io/fs"
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
-	"strings"
+	"sync"
 	"syscall"
 	"time"
 
-	"github.com/spf13/cobra"
-
 	"github.com/fatedier/frp/client"
-	"github.com/fatedier/frp/models/auth"
-	"github.com/fatedier/frp/models/config"
-	"github.com/fatedier/frp/utils/log"
-	"github.com/fatedier/frp/utils/version"
+	"github.com/fatedier/frp/pkg/auth"
+	"github.com/fatedier/frp/pkg/config"
+	"github.com/fatedier/frp/pkg/util/log"
+	"github.com/fatedier/frp/pkg/util/version"
+
+	"github.com/spf13/cobra"
 )
 
 const (
@@ -41,6 +42,7 @@ const (
 
 var (
 	cfgFile     string
+	cfgDir      string
 	showVersion bool
 
 	serverAddr      string
@@ -53,7 +55,7 @@ var (
 	disableLogColor bool
 
 	proxyName         string
-	localIp           string
+	localIP           string
 	localPort         int
 	remotePort        int
 	useEncryption     bool
@@ -71,14 +73,25 @@ var (
 	bindAddr          string
 	bindPort          int
 
-	kcpDoneCh chan struct{}
+	tlsEnable bool
 )
 
 func init() {
 	rootCmd.PersistentFlags().StringVarP(&cfgFile, "config", "c", "./frpc.ini", "config file of frpc")
+	rootCmd.PersistentFlags().StringVarP(&cfgDir, "config_dir", "", "", "config directory, run one frpc service for each file in config directory")
 	rootCmd.PersistentFlags().BoolVarP(&showVersion, "version", "v", false, "version of frpc")
+}
 
-	kcpDoneCh = make(chan struct{})
+func RegisterCommonFlags(cmd *cobra.Command) {
+	cmd.PersistentFlags().StringVarP(&serverAddr, "server_addr", "s", "127.0.0.1:7000", "frp server's address")
+	cmd.PersistentFlags().StringVarP(&user, "user", "u", "", "user")
+	cmd.PersistentFlags().StringVarP(&protocol, "protocol", "p", "tcp", "tcp or kcp or websocket")
+	cmd.PersistentFlags().StringVarP(&token, "token", "t", "", "auth token")
+	cmd.PersistentFlags().StringVarP(&logLevel, "log_level", "", "info", "log level")
+	cmd.PersistentFlags().StringVarP(&logFile, "log_file", "", "console", "console or file path")
+	cmd.PersistentFlags().IntVarP(&logMaxDays, "log_max_days", "", 3, "log file reversed days")
+	cmd.PersistentFlags().BoolVarP(&disableLogColor, "disable_log_color", "", false, "disable log color in console")
+	cmd.PersistentFlags().BoolVarP(&tlsEnable, "tls_enable", "", false, "enable frpc tls")
 }
 
 var rootCmd = &cobra.Command{
@@ -87,6 +100,32 @@ var rootCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if showVersion {
 			fmt.Println(version.Full())
+			return nil
+		}
+
+		// If cfgDir is not empty, run multiple frpc service for each config file in cfgDir.
+		// Note that it's only designed for testing. It's not guaranteed to be stable.
+		if cfgDir != "" {
+			var wg sync.WaitGroup
+			filepath.WalkDir(cfgDir, func(path string, d fs.DirEntry, err error) error {
+				if err != nil {
+					return nil
+				}
+				if d.IsDir() {
+					return nil
+				}
+				wg.Add(1)
+				time.Sleep(time.Millisecond)
+				go func() {
+					defer wg.Done()
+					err := runClient(path)
+					if err != nil {
+						fmt.Printf("frpc service error for config file [%s]\n", path)
+					}
+				}()
+				return nil
+			})
+			wg.Wait()
 			return nil
 		}
 
@@ -106,54 +145,27 @@ func Execute() {
 	}
 }
 
-func handleSignal(svr *client.Service) {
-	ch := make(chan os.Signal)
+func handleSignal(svr *client.Service, doneCh chan struct{}) {
+	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
 	<-ch
-	svr.Close()
-	time.Sleep(250 * time.Millisecond)
-	close(kcpDoneCh)
-}
-
-func parseClientCommonCfg(fileType int, content string) (cfg config.ClientCommonConf, err error) {
-	if fileType == CfgFileTypeIni {
-		cfg, err = parseClientCommonCfgFromIni(content)
-	} else if fileType == CfgFileTypeCmd {
-		cfg, err = parseClientCommonCfgFromCmd()
-	}
-	if err != nil {
-		return
-	}
-
-	err = cfg.Check()
-	if err != nil {
-		return
-	}
-	return
-}
-
-func parseClientCommonCfgFromIni(content string) (config.ClientCommonConf, error) {
-	cfg, err := config.UnmarshalClientConfFromIni(content)
-	if err != nil {
-		return config.ClientCommonConf{}, err
-	}
-	return cfg, err
+	svr.GracefulClose(500 * time.Millisecond)
+	close(doneCh)
 }
 
 func parseClientCommonCfgFromCmd() (cfg config.ClientCommonConf, err error) {
 	cfg = config.GetDefaultClientConf()
 
-	strs := strings.Split(serverAddr, ":")
-	if len(strs) < 2 {
-		err = fmt.Errorf("invalid server_addr")
+	ipStr, portStr, err := net.SplitHostPort(serverAddr)
+	if err != nil {
+		err = fmt.Errorf("invalid server_addr: %v", err)
 		return
 	}
-	if strs[0] != "" {
-		cfg.ServerAddr = strs[0]
-	}
-	cfg.ServerPort, err = strconv.Atoi(strs[1])
+
+	cfg.ServerAddr = ipStr
+	cfg.ServerPort, err = strconv.Atoi(portStr)
 	if err != nil {
-		err = fmt.Errorf("invalid server_addr")
+		err = fmt.Errorf("invalid server_addr: %v", err)
 		return
 	}
 
@@ -162,57 +174,42 @@ func parseClientCommonCfgFromCmd() (cfg config.ClientCommonConf, err error) {
 	cfg.LogLevel = logLevel
 	cfg.LogFile = logFile
 	cfg.LogMaxDays = int64(logMaxDays)
-	if logFile == "console" {
-		cfg.LogWay = "console"
-	} else {
-		cfg.LogWay = "file"
-	}
 	cfg.DisableLogColor = disableLogColor
 
 	// Only token authentication is supported in cmd mode
-	cfg.AuthClientConfig = auth.GetDefaultAuthClientConf()
+	cfg.ClientConfig = auth.GetDefaultClientConf()
 	cfg.Token = token
+	cfg.TLSEnable = tlsEnable
 
+	cfg.Complete()
+	if err = cfg.Validate(); err != nil {
+		err = fmt.Errorf("Parse config error: %v", err)
+		return
+	}
 	return
 }
 
-func runClient(cfgFilePath string) (err error) {
-	var content string
-	content, err = config.GetRenderedConfFromFile(cfgFilePath)
-	if err != nil {
-		return
-	}
-
-	cfg, err := parseClientCommonCfg(CfgFileTypeIni, content)
-	if err != nil {
-		return
-	}
-
-	pxyCfgs, visitorCfgs, err := config.LoadAllConfFromIni(cfg.User, content, cfg.Start)
+func runClient(cfgFilePath string) error {
+	cfg, pxyCfgs, visitorCfgs, err := config.ParseClientConfig(cfgFilePath)
 	if err != nil {
 		return err
 	}
-
-	err = startService(cfg, pxyCfgs, visitorCfgs, cfgFilePath)
-	return
+	return startService(cfg, pxyCfgs, visitorCfgs, cfgFilePath)
 }
 
-func startService(cfg config.ClientCommonConf, pxyCfgs map[string]config.ProxyConf, visitorCfgs map[string]config.VisitorConf, cfgFile string) (err error) {
+func startService(
+	cfg config.ClientCommonConf,
+	pxyCfgs map[string]config.ProxyConf,
+	visitorCfgs map[string]config.VisitorConf,
+	cfgFile string,
+) (err error) {
+
 	log.InitLog(cfg.LogWay, cfg.LogFile, cfg.LogLevel,
 		cfg.LogMaxDays, cfg.DisableLogColor)
 
-	if cfg.DnsServer != "" {
-		s := cfg.DnsServer
-		if !strings.Contains(s, ":") {
-			s += ":53"
-		}
-		// Change default dns server for frpc
-		net.DefaultResolver = &net.Resolver{
-			PreferGo: true,
-			Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
-				return net.Dial("udp", s)
-			},
-		}
+	if cfgFile != "" {
+		log.Trace("start frpc service for config file [%s]", cfgFile)
+		defer log.Trace("frpc service for config file [%s] stopped", cfgFile)
 	}
 	svr, errRet := client.NewService(cfg, pxyCfgs, visitorCfgs, cfgFile)
 	if errRet != nil {
@@ -220,13 +217,14 @@ func startService(cfg config.ClientCommonConf, pxyCfgs map[string]config.ProxyCo
 		return
 	}
 
+	kcpDoneCh := make(chan struct{})
 	// Capture the exit signal if we use kcp.
 	if cfg.Protocol == "kcp" {
-		go handleSignal(svr)
+		go handleSignal(svr, kcpDoneCh)
 	}
 
 	err = svr.Run()
-	if cfg.Protocol == "kcp" {
+	if err == nil && cfg.Protocol == "kcp" {
 		<-kcpDoneCh
 	}
 	return

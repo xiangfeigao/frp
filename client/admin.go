@@ -15,43 +15,54 @@
 package client
 
 import (
-	"fmt"
 	"net"
 	"net/http"
+	"net/http/pprof"
 	"time"
 
 	"github.com/fatedier/frp/assets"
-	frpNet "github.com/fatedier/frp/utils/net"
+	frpNet "github.com/fatedier/frp/pkg/util/net"
 
 	"github.com/gorilla/mux"
 )
 
 var (
-	httpServerReadTimeout  = 10 * time.Second
-	httpServerWriteTimeout = 10 * time.Second
+	httpServerReadTimeout  = 60 * time.Second
+	httpServerWriteTimeout = 60 * time.Second
 )
 
-func (svr *Service) RunAdminServer(addr string, port int) (err error) {
+func (svr *Service) RunAdminServer(address string) (err error) {
 	// url router
 	router := mux.NewRouter()
 
-	user, passwd := svr.cfg.AdminUser, svr.cfg.AdminPwd
-	router.Use(frpNet.NewHttpAuthMiddleware(user, passwd).Middleware)
+	router.HandleFunc("/healthz", svr.healthz)
 
-	// api, see dashboard_api.go
-	router.HandleFunc("/api/reload", svr.apiReload).Methods("GET")
-	router.HandleFunc("/api/status", svr.apiStatus).Methods("GET")
-	router.HandleFunc("/api/config", svr.apiGetConfig).Methods("GET")
-	router.HandleFunc("/api/config", svr.apiPutConfig).Methods("PUT")
+	// debug
+	if svr.cfg.PprofEnable {
+		router.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+		router.HandleFunc("/debug/pprof/profile", pprof.Profile)
+		router.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+		router.HandleFunc("/debug/pprof/trace", pprof.Trace)
+		router.PathPrefix("/debug/pprof/").HandlerFunc(pprof.Index)
+	}
+
+	subRouter := router.NewRoute().Subrouter()
+	user, passwd := svr.cfg.AdminUser, svr.cfg.AdminPwd
+	subRouter.Use(frpNet.NewHTTPAuthMiddleware(user, passwd).Middleware)
+
+	// api, see admin_api.go
+	subRouter.HandleFunc("/api/reload", svr.apiReload).Methods("GET")
+	subRouter.HandleFunc("/api/status", svr.apiStatus).Methods("GET")
+	subRouter.HandleFunc("/api/config", svr.apiGetConfig).Methods("GET")
+	subRouter.HandleFunc("/api/config", svr.apiPutConfig).Methods("PUT")
 
 	// view
-	router.Handle("/favicon.ico", http.FileServer(assets.FileSystem)).Methods("GET")
-	router.PathPrefix("/static/").Handler(frpNet.MakeHttpGzipHandler(http.StripPrefix("/static/", http.FileServer(assets.FileSystem)))).Methods("GET")
-	router.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	subRouter.Handle("/favicon.ico", http.FileServer(assets.FileSystem)).Methods("GET")
+	subRouter.PathPrefix("/static/").Handler(frpNet.MakeHTTPGzipHandler(http.StripPrefix("/static/", http.FileServer(assets.FileSystem)))).Methods("GET")
+	subRouter.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/static/", http.StatusMovedPermanently)
 	})
 
-	address := fmt.Sprintf("%s:%d", addr, port)
 	server := &http.Server{
 		Addr:         address,
 		Handler:      router,

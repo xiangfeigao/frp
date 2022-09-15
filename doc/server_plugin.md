@@ -70,7 +70,7 @@ The response can look like any of the following:
 
 ### Operation
 
-Currently `Login`, `NewProxy`, `Ping`, `NewWorkConn` and `NewUserConn` operations are supported.
+Currently `Login`, `NewProxy`, `CloseProxy`, `Ping`, `NewWorkConn` and `NewUserConn` operations are supported.
 
 #### Login
 
@@ -88,7 +88,8 @@ Client login operation
         "privilege_key": <string>,
         "run_id": <string>,
         "pool_count": <int>,
-        "metas": map<string>string
+        "metas": map<string>string,
+        "client_address": <string>
     }
 }
 ```
@@ -131,6 +132,26 @@ Create new proxy
         "multiplexer": <string>
 
         "metas": map<string>string
+    }
+}
+```
+
+#### CloseProxy
+
+A previously created proxy is closed.
+
+Please note that one request will be sent for every proxy that is closed, do **NOT** use this
+if you have too many proxies bound to a single client, as this may exhaust the server's resources.
+
+```
+{
+    "content": {
+        "user": {
+            "user": <string>,
+            "metas": map<string>string
+            "run_id": <string>
+        },
+        "proxy_name": <string>
     }
 }
 ```
@@ -209,9 +230,10 @@ path = /handler
 ops = NewProxy
 ```
 
-addr: the address where the external RPC service listens on.
-path: http request url path for the POST request.
-ops: operations plugin needs to handle (e.g. "Login", "NewProxy", ...).
+- addr: the address where the external RPC service listens. Defaults to http. For https, specify the schema: `addr = https://127.0.0.1:9001`.
+- path: http request url path for the POST request.
+- ops: operations plugin needs to handle (e.g. "Login", "NewProxy", ...).
+- tls_verify: When the schema is https, we verify by default. Set this value to false if you want to skip verification.
 
 ### Metadata
 
