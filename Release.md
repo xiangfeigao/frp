@@ -1,8 +1,7 @@
-### New
+### Features
 
-* Use auto generated certificates if `plugin_key_path` and `plugin_crt_path` are empty for plugin `https2https` and `https2http`.
-* Server dashboard supports TLS configs.
+* `https2http` and `https2https` plugin now supports `X-Forwared-For` header.
 
-### Fix
+### Fixes
 
-* xtcp error with IPv6 address.
+* `X-Forwared-For` header is now correctly set in the request to the backend server for proxy type http.

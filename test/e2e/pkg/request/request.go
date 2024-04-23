@@ -12,9 +12,10 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/fatedier/frp/test/e2e/pkg/rpc"
-	"github.com/fatedier/frp/test/e2e/pkg/utils"
 	libdial "github.com/fatedier/golib/net/dial"
+
+	httppkg "github.com/fatedier/frp/pkg/util/http"
+	"github.com/fatedier/frp/test/e2e/pkg/rpc"
 )
 
 type Request struct {
@@ -114,7 +115,7 @@ func (r *Request) HTTPHeaders(headers map[string]string) *Request {
 }
 
 func (r *Request) HTTPAuth(user, password string) *Request {
-	r.authValue = utils.BasicAuth(user, password)
+	r.authValue = httppkg.BasicAuth(user, password)
 	return r
 }
 
@@ -144,7 +145,10 @@ func (r *Request) Do() (*Response, error) {
 		err  error
 	)
 
-	addr := net.JoinHostPort(r.addr, strconv.Itoa(r.port))
+	addr := r.addr
+	if r.port > 0 {
+		addr = net.JoinHostPort(r.addr, strconv.Itoa(r.port))
+	}
 	// for protocol http and https
 	if r.protocol == "http" || r.protocol == "https" {
 		return r.sendHTTPRequest(r.method, fmt.Sprintf("%s://%s%s", r.protocol, addr, r.path),
@@ -181,7 +185,7 @@ func (r *Request) Do() (*Response, error) {
 
 	defer conn.Close()
 	if r.timeout > 0 {
-		conn.SetDeadline(time.Now().Add(r.timeout))
+		_ = conn.SetDeadline(time.Now().Add(r.timeout))
 	}
 	buf, err := r.sendRequestByConn(conn, r.body)
 	if err != nil {
@@ -199,7 +203,6 @@ type Response struct {
 func (r *Request) sendHTTPRequest(method, urlstr string, host string, headers map[string]string,
 	proxy string, body []byte, tlsConfig *tls.Config,
 ) (*Response, error) {
-
 	var inBody io.Reader
 	if len(body) != 0 {
 		inBody = bytes.NewReader(body)
@@ -240,6 +243,7 @@ func (r *Request) sendHTTPRequest(method, urlstr string, host string, headers ma
 	if err != nil {
 		return nil, err
 	}
+	defer resp.Body.Close()
 
 	ret := &Response{Code: resp.StatusCode, Header: resp.Header}
 	buf, err := io.ReadAll(resp.Body)

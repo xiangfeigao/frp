@@ -4,14 +4,11 @@ import (
 	"errors"
 	"net"
 	"net/http"
-	"strconv"
 
 	"golang.org/x/net/websocket"
 )
 
-var (
-	ErrWebsocketListenerClosed = errors.New("websocket listener closed")
-)
+var ErrWebsocketListenerClosed = errors.New("websocket listener closed")
 
 const (
 	FrpWebsocketPath = "/~!frp"
@@ -21,8 +18,7 @@ type WebsocketListener struct {
 	ln       net.Listener
 	acceptCh chan net.Conn
 
-	server    *http.Server
-	httpMutex *http.ServeMux
+	server *http.Server
 }
 
 // NewWebsocketListener to handle websocket connections
@@ -47,17 +43,10 @@ func NewWebsocketListener(ln net.Listener) (wl *WebsocketListener) {
 		Handler: muxer,
 	}
 
-	go wl.server.Serve(ln)
+	go func() {
+		_ = wl.server.Serve(ln)
+	}()
 	return
-}
-
-func ListenWebsocket(bindAddr string, bindPort int) (*WebsocketListener, error) {
-	tcpLn, err := net.Listen("tcp", net.JoinHostPort(bindAddr, strconv.Itoa(bindPort)))
-	if err != nil {
-		return nil, err
-	}
-	l := NewWebsocketListener(tcpLn)
-	return l, nil
 }
 
 func (p *WebsocketListener) Accept() (net.Conn, error) {
