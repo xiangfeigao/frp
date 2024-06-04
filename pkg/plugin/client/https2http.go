@@ -20,12 +20,17 @@ import (
 	"crypto/tls"
 	"fmt"
 	"io"
+	stdlog "log"
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"time"
+
+	"github.com/fatedier/golib/pool"
 
 	v1 "github.com/fatedier/frp/pkg/config/v1"
 	"github.com/fatedier/frp/pkg/transport"
+	"github.com/fatedier/frp/pkg/util/log"
 	netpkg "github.com/fatedier/frp/pkg/util/net"
 )
 
@@ -63,10 +68,8 @@ func NewHTTPS2HTTPPlugin(options v1.ClientPluginOptions) (Plugin, error) {
 				req.Header.Set(k, v)
 			}
 		},
-	}
-
-	p.s = &http.Server{
-		Handler: rp,
+		BufferPool: pool.NewBuffer(32 * 1024),
+		ErrorLog:   stdlog.New(log.NewWriteLogger(log.WarnLevel, 2), "", 0),
 	}
 
 	var (
@@ -82,10 +85,15 @@ func NewHTTPS2HTTPPlugin(options v1.ClientPluginOptions) (Plugin, error) {
 	if err != nil {
 		return nil, fmt.Errorf("gen TLS config error: %v", err)
 	}
-	ln := tls.NewListener(listener, tlsConfig)
+
+	p.s = &http.Server{
+		Handler:           rp,
+		ReadHeaderTimeout: 60 * time.Second,
+		TLSConfig:         tlsConfig,
+	}
 
 	go func() {
-		_ = p.s.Serve(ln)
+		_ = p.s.ServeTLS(listener, "", "")
 	}()
 	return p, nil
 }
